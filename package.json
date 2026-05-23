@@ -39,9 +39,8 @@
 		},
 		"languageModelChatProviders": [
 			{
-				"displayName": "OpenRouter Vscode Extension",
-				"managementCommand": "openrouter.manage",
-				"vendor": "luckyone.openrouter"
+				"id": "luckyone.openrouter",
+				"displayName": "OpenRouter VS Code Extension"
 			}
 		]
 	},
