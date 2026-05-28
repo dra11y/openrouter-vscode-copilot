@@ -1,18 +1,18 @@
 {
-	"name": "openrouter-vscode-copilot",
+	"name": "openrouter-vscode",
 	"displayName": "OpenRouter for VS Code",
 	"description": "OpenRouter models provider for VS Code Chat",
 	"version": "0.1.0",
-	"publisher": "ivanmokshin",
+	"publisher": "dra11y",
 	"engines": {
 		"vscode": "^1.93.0"
 	},
 	"repository": {
-		"url": "https://github.com/LuckyOneDev/openrouter-vscode-copilot"
+		"url": "https://github.com/dra11y/openrouter-vscode-copilot"
 	},
 	"license": "AGPL-3.0-only",
 	"activationEvents": [
-		"onLanguageModelChat:luckyone.openrouter"
+		"onLanguageModelChat:dra11y.openrouter"
 	],
 	"categories": [
 		"AI",
@@ -23,7 +23,7 @@
 	"contributes": {
 		"commands": [
 			{
-				"command": "openrouter.manage",
+				"command": "openrouter.resetApiKey",
 				"title": "OpenRouter: Reset API Key"
 			}
 		],
@@ -39,7 +39,8 @@
 		},
 		"languageModelChatProviders": [
 			{
-				"id": "luckyone.openrouter",
+				"vendor": "dra11y.openrouter",
+				"id": "dra11y.openrouter",
 				"displayName": "OpenRouter VS Code Extension"
 			}
 		]
@@ -54,16 +55,16 @@
 		"check-types": "tsc --noEmit"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "2.3.14",
-		"@types/node": "22.x",
-		"@types/vscode": "^1.93.0",
-		"@vscode/vsce": "^3.7.1",
-		"typescript": "^5.9.3",
-		"vite": "^7.3.1"
+		"@biomejs/biome": "2",
+		"@types/node": "25",
+		"@types/vscode": "^1",
+		"@vscode/vsce": "^3",
+		"esbuild": "^0.28.0",
+		"typescript": "^6",
+		"vite": "^8"
 	},
 	"dependencies": {
-		"@openrouter/sdk": "^0.8.0",
-		"openai": "^4.104.0"
+		"@openrouter/sdk": "^0.12"
 	},
 	"enabledApiProposals": [
 		"languageModelThinkingPart"

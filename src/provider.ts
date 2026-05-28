@@ -1,4 +1,4 @@
-import OpenAI from "openai";
+import { OpenRouter } from "@openrouter/sdk";
 import * as vscode from "vscode";
 import { OpenRouterAdapter } from "./adapter.js";
 import { MODEL_ID_PREFIX, REPOSITORY } from "./const.js";
@@ -57,7 +57,10 @@ export class OpenRouterProvider implements vscode.LanguageModelChatProvider {
 	private _cachedModels: vscode.LanguageModelChatInformation[] | undefined;
 	private readonly adapter = new OpenRouterAdapter();
 
-	constructor(private readonly secrets: vscode.SecretStorage) {}
+	constructor(
+		private readonly secrets: vscode.SecretStorage,
+		private readonly log: vscode.LogOutputChannel
+	) { }
 
 	private async getApiKey(silent?: boolean): Promise<string | undefined> {
 		let key = await this.secrets.get("openrouter.apiKey");
@@ -77,9 +80,7 @@ export class OpenRouterProvider implements vscode.LanguageModelChatProvider {
 		options: vscode.PrepareLanguageModelChatModelOptions,
 		token: vscode.CancellationToken,
 	): Promise<vscode.LanguageModelChatInformation[]> {
-		const silent = "silent" in options && options.silent === true;
-		const apiKey = await this.getApiKey(silent);
-		if (!apiKey && silent) return [];
+		// const silent = "silent" in options && options.silent === true;
 
 		if (this._cachedModels) return this._cachedModels;
 
@@ -88,14 +89,20 @@ export class OpenRouterProvider implements vscode.LanguageModelChatProvider {
 		const controller = new AbortController();
 		token.onCancellationRequested(() => controller.abort());
 
+		// Use API key if available (for custom models/pricing), otherwise fetch publicly.
+		const apiKey = await this.getApiKey(true);
+		const headers: Record<string, string> = {
+			"Content-Type": "application/json",
+			"HTTP-Referer": REPOSITORY,
+			"X-Title": "VS Code OpenRouter",
+		};
+		if (apiKey) {
+			headers["Authorization"] = `Bearer ${apiKey}`;
+		}
+
 		const resp = await fetch(url, {
 			method: "GET",
-			headers: {
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${apiKey}`,
-				"HTTP-Referer": REPOSITORY,
-				"X-Title": "VS Code OpenRouter",
-			},
+			headers,
 			signal: controller.signal,
 		});
 		if (!resp.ok) throw new Error(`OpenRouter models ${resp.status}: ${await resp.text()}`);
@@ -125,7 +132,6 @@ export class OpenRouterProvider implements vscode.LanguageModelChatProvider {
 		return this._cachedModels;
 	}
 
-	// LanguageModelChatProvider: stream chat completions (OpenAI-compatible endpoint)
 	async provideLanguageModelChatResponse(
 		model: vscode.LanguageModelChatInformation,
 		messages: readonly vscode.LanguageModelChatRequestMessage[],
@@ -138,7 +144,10 @@ export class OpenRouterProvider implements vscode.LanguageModelChatProvider {
 
 		const modelId = this.adapter.getOpenRouterModelId(model.id);
 		let orMessages = this.adapter.vscodeMessagesToOpenRouter(messages);
-		if (orMessages.length === 0) throw new Error("No messages to send.");
+		if (orMessages.length === 0) {
+			this.log.warn('no new messages to send');
+			return;
+		}
 
 		const systemPromptOverride = vscode.workspace
 			.getConfiguration("openrouter")
@@ -152,52 +161,64 @@ export class OpenRouterProvider implements vscode.LanguageModelChatProvider {
 		const controller = new AbortController();
 		token.onCancellationRequested(() => controller.abort());
 
-		const openai = new OpenAI({
-			apiKey,
-			baseURL: getModelsBaseUrl(),
-			defaultHeaders: { "HTTP-Referer": REPOSITORY, "X-Title": "VS Code OpenRouter" },
-		});
+		const openrouter = new OpenRouter({ apiKey });
 
 		const tools = this.adapter.convertTools(options.tools ?? []);
-		const stream = await openai.chat.completions.create(
-			{
-				model: modelId,
-				messages: orMessages,
-				stream: true,
-				tool_choice: "auto",
-				tools: tools.length > 0 ? tools : undefined,
-				reasoning: { summary: "detailed" },
-			} as Parameters<OpenAI["chat"]["completions"]["create"]>[0],
-			{ signal: controller.signal },
-		);
+		let stream;
+		this.log.info('sending chat request to modelId:', modelId, 'messages:', orMessages.length)
+		try {
+			stream = await openrouter.chat.send(
+				{
+					httpReferer: REPOSITORY,
+					appTitle: "VS Code OpenRouter",
+					chatRequest: {
+						model: modelId,
+						messages: orMessages,
+						stream: true,
+						toolChoice: "auto",
+						tools: tools.length > 0 ? tools : undefined,
+						reasoning: { summary: "detailed" },
+					},
+				},
+				{ signal: controller.signal },
+			);
+		} catch (err) {
+			this.log.error('OpenRouter request failed', err);
+			throw new Error(`OpenRouter request failed: ${err}`);
+		}
 
 		let thinkingActive = false;
 		let reportedText = false;
 		let reportedToolCall = false;
 		const toolCallAccum = new Map<number, { id: string; name: string; argsStr: string }>();
 
-		const iterable = stream as AsyncIterable<OpenAI.Chat.ChatCompletionChunk>;
-		for await (const chunk of iterable) {
+		for await (const chunk of stream) {
+			this.log.info('got chunk id:', chunk.id, 'choices:', chunk.choices.length, 'from model:', chunk.model)
 			for (const choice of chunk.choices ?? []) {
-				const delta = choice.delta as typeof choice.delta & DeltaWithReasoning;
+				const delta = choice.delta as (typeof choice.delta & DeltaWithReasoning);
 				if (!delta) continue;
 
 				const reasoning = delta.reasoning;
 				if (reasoning) {
+					this.log.info('thinking length:', reasoning.length);
 					progress.report(new vscode.LanguageModelThinkingPart(reasoning, "", {}));
 					thinkingActive = true;
 				} else if (thinkingActive) {
+					this.log.warn('not thinking');
 					progress.report(new vscode.LanguageModelThinkingPart("", "", { vscode_reasoning_done: true }));
 					thinkingActive = false;
 				}
 
-				if (delta.content?.trim()) {
-					progress.report(new vscode.LanguageModelTextPart(delta.content));
+				let content = delta.content;
+				if (content?.trim()) {
+					this.log.info('reported content length:', content.length)
+					progress.report(new vscode.LanguageModelTextPart(content));
 					reportedText = true;
 				}
 
-				const toolCalls = delta.tool_calls;
+				const toolCalls = delta.toolCalls;
 				if (toolCalls?.length) {
+					this.log.info('tool calls:', toolCalls.length)
 					for (const toolCall of toolCalls) {
 						const index = toolCall.index ?? 0;
 						let acc = toolCallAccum.get(index);
@@ -234,11 +255,13 @@ export class OpenRouterProvider implements vscode.LanguageModelChatProvider {
 		}
 
 		if (thinkingActive) {
+			this.log.warn('reporting thinking done')
 			progress.report(new vscode.LanguageModelThinkingPart("", "", { vscode_reasoning_done: true }));
 		}
 
 		if (!reportedText && !reportedToolCall) {
-			progress.report(new vscode.LanguageModelTextPart(" "));
+			this.log.warn('reporting no response')
+			progress.report(new vscode.LanguageModelTextPart("<NO RESPONSE>"));
 		}
 	}
 

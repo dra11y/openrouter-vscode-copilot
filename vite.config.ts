@@ -15,7 +15,7 @@ export default defineConfig({
 		rollupOptions: {
 			external: ["vscode"],
 			output: {
-				inlineDynamicImports: true,
+				codeSplitting: false,
 			},
 		},
 	},
